@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useTrading } from '../../context/TradingContext';
+import { Account } from '../../types/mt5';
 import { ExnessLogo, MetaQuotesLogo } from '../common/Logos';
 
 const QrIcon: React.FC = () => (
@@ -8,11 +9,22 @@ const QrIcon: React.FC = () => (
   </svg>
 );
 
+const TrashIcon: React.FC<{ className?: string }> = ({ className = 'w-5 h-5' }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6" />
+    <path d="M14 11v6" />
+    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+  </svg>
+);
+
 export const AccountsView: React.FC = () => {
   const {
     accounts,
     activeAccount,
     setActiveAccount,
+    deleteAccount,
     setActiveTab,
     setIsDrawerOpen,
     setAddAccountModalOpen,
@@ -22,6 +34,29 @@ export const AccountsView: React.FC = () => {
 
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
   const [qrToast, setQrToast] = useState<string | null>(null);
+  const [statusToast, setStatusToast] = useState<string | null>(null);
+  const [accountToDelete, setAccountToDelete] = useState<Account | null>(null);
+
+  const showNotice = (msg: string) => {
+    setStatusToast(msg);
+    setTimeout(() => setStatusToast(null), 2600);
+  };
+
+  const requestDeleteAccount = (acc: Account) => {
+    if (accounts.length <= 1) {
+      showNotice('لا يمكن حذف الحساب الوحيد المتبقي');
+      return;
+    }
+    setAccountToDelete(acc);
+  };
+
+  const confirmDeleteAccount = () => {
+    if (!accountToDelete) return;
+    const deletedNumber = accountToDelete.accountNumber;
+    deleteAccount(accountToDelete.id);
+    setAccountToDelete(null);
+    showNotice(`تم حذف الحساب ${deletedNumber}`);
+  };
 
   const secondaryAccounts = accounts.filter((a) => a.id !== activeAccount.id);
 
@@ -125,6 +160,17 @@ export const AccountsView: React.FC = () => {
                 >
                   مولد كلمات المرور (OTP)
                 </button>
+                <div className="my-1 border-t border-[#2d313b]" />
+                <button
+                  onClick={() => {
+                    setMenuOpen(false);
+                    requestDeleteAccount(activeAccount);
+                  }}
+                  className="w-full px-4 py-2.5 text-right text-[#ef5350] hover:bg-[#ef5350]/10 cursor-pointer flex items-center justify-between"
+                >
+                  <TrashIcon className="w-4 h-4" />
+                  <span>حذف الحساب</span>
+                </button>
               </div>
             </>
           )}
@@ -191,19 +237,33 @@ export const AccountsView: React.FC = () => {
               <QrIcon />
             </button>
 
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setActiveTab('messages');
-              }}
-              aria-label="إشعارات الحساب"
-              className="p-1 text-[#787f88] hover:text-white rounded cursor-pointer"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-5 h-5">
-                <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
-                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-              </svg>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  requestDeleteAccount(activeAccount);
+                }}
+                aria-label="حذف الحساب"
+                title="حذف الحساب"
+                className="p-1.5 text-[#8e959e] hover:text-[#ef5350] hover:bg-[#ef5350]/10 rounded-full transition-colors cursor-pointer"
+              >
+                <TrashIcon className="w-5 h-5" />
+              </button>
+
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setActiveTab('messages');
+                }}
+                aria-label="إشعارات الحساب"
+                className="p-1 text-[#787f88] hover:text-white rounded cursor-pointer"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-5 h-5">
+                  <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -276,21 +336,35 @@ export const AccountsView: React.FC = () => {
                   <QrIcon />
                 </button>
 
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveAccount(acc);
-                    setAccountInfoModalOpen(true);
-                  }}
-                  aria-label="معلومات الحساب"
-                  className="p-1 text-[#cfd8dc] hover:text-white rounded cursor-pointer"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" className="w-6 h-6">
-                    <circle cx="12" cy="12" r="9.5" />
-                    <line x1="12" y1="11" x2="12" y2="16.5" strokeLinecap="round" />
-                    <circle cx="12" cy="7.8" r="1" fill="currentColor" stroke="none" />
-                  </svg>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      requestDeleteAccount(acc);
+                    }}
+                    aria-label="حذف الحساب"
+                    title="حذف الحساب"
+                    className="p-1.5 text-[#8e959e] hover:text-[#ef5350] hover:bg-[#ef5350]/10 rounded-full transition-colors cursor-pointer"
+                  >
+                    <TrashIcon className="w-5 h-5" />
+                  </button>
+
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveAccount(acc);
+                      setAccountInfoModalOpen(true);
+                    }}
+                    aria-label="معلومات الحساب"
+                    className="p-1 text-[#cfd8dc] hover:text-white rounded cursor-pointer"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" className="w-6 h-6">
+                      <circle cx="12" cy="12" r="9.5" />
+                      <line x1="12" y1="11" x2="12" y2="16.5" strokeLinecap="round" />
+                      <circle cx="12" cy="7.8" r="1" fill="currentColor" stroke="none" />
+                    </svg>
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -300,6 +374,56 @@ export const AccountsView: React.FC = () => {
       {qrToast && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-[#23262d] border border-[#3588e8] text-white text-xs font-num px-4 py-2 rounded-xl shadow-xl z-40 whitespace-nowrap">
           QR: {qrToast}
+        </div>
+      )}
+
+      {statusToast && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-[#23262d] border border-[#ef5350] text-white text-xs font-medium px-4 py-2 rounded-xl shadow-xl z-40 whitespace-nowrap animate-fadeIn">
+          {statusToast}
+        </div>
+      )}
+
+      {/* Delete Account Confirmation Modal */}
+      {accountToDelete && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50 animate-fadeIn"
+          onClick={() => setAccountToDelete(null)}
+        >
+          <div
+            className="bg-[#181b21] border border-[#2a2f3a] rounded-2xl w-full max-w-xs p-5 text-right shadow-2xl space-y-4 animate-scaleIn"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-[#ef5350]/15 text-[#ef5350] flex items-center justify-center shrink-0">
+                <TrashIcon className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">حذف الحساب</h3>
+                <p className="text-xs font-num text-[#8e9aa8] mt-0.5" dir="ltr">
+                  {accountToDelete.accountNumber} · {accountToDelete.server}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-[#cfd8dc] leading-relaxed">
+              هل أنت متأكد من حذف الحساب <strong className="text-white">{accountToDelete.name}</strong>؟ سيتم إزالته من قائمة الحسابات المحفوظة.
+            </p>
+
+            <div className="flex items-center gap-2.5 pt-1">
+              <button
+                onClick={confirmDeleteAccount}
+                className="flex-1 py-2.5 rounded-xl bg-[#d32f2f] hover:bg-[#c62828] text-white font-bold text-xs cursor-pointer transition-colors"
+              >
+                حذف
+              </button>
+              <button
+                onClick={() => setAccountToDelete(null)}
+                className="flex-1 py-2.5 rounded-xl bg-[#252932] hover:bg-[#2f3440] text-[#cfd8dc] font-bold text-xs cursor-pointer transition-colors"
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

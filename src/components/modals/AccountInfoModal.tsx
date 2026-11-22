@@ -1,11 +1,27 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTrading } from '../../context/TradingContext';
 import { ExnessLogo, MetaQuotesLogo } from '../common/Logos';
 
 export const AccountInfoModal: React.FC = () => {
-  const { accountInfoModalOpen, setAccountInfoModalOpen, activeAccount } = useTrading();
+  const {
+    accountInfoModalOpen,
+    setAccountInfoModalOpen,
+    activeAccount,
+    accounts,
+    deleteAccount
+  } = useTrading();
+
+  const [confirmingDelete, setConfirmingDelete] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!accountInfoModalOpen) {
+      setConfirmingDelete(false);
+    }
+  }, [accountInfoModalOpen]);
 
   if (!accountInfoModalOpen) return null;
+
+  const canDelete = accounts.length > 1;
 
   return (
     <div
@@ -62,12 +78,47 @@ export const AccountInfoModal: React.FC = () => {
             </div>
           </div>
 
-          <button
-            onClick={() => setAccountInfoModalOpen(false)}
-            className="w-full py-2.5 bg-[#1976d2] hover:bg-[#1565c0] text-white font-bold rounded-xl text-xs cursor-pointer"
-          >
-            إغلاق
-          </button>
+          {confirmingDelete ? (
+            <div className="p-3 rounded-xl bg-[#ef5350]/10 border border-[#ef5350]/40 space-y-2.5">
+              <p className="text-xs text-[#ffcdd2] font-medium">
+                تأكيد حذف الحساب {activeAccount.accountNumber}؟
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    deleteAccount(activeAccount.id);
+                    setAccountInfoModalOpen(false);
+                  }}
+                  className="flex-1 py-2 bg-[#d32f2f] hover:bg-[#c62828] text-white font-bold rounded-lg text-xs cursor-pointer"
+                >
+                  تأكيد الحذف
+                </button>
+                <button
+                  onClick={() => setConfirmingDelete(false)}
+                  className="flex-1 py-2 bg-[#252932] hover:bg-[#2f3440] text-[#cfd8dc] font-bold rounded-lg text-xs cursor-pointer"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2.5">
+              {canDelete && (
+                <button
+                  onClick={() => setConfirmingDelete(true)}
+                  className="flex-1 py-2.5 bg-[#ef5350]/15 hover:bg-[#ef5350]/25 border border-[#ef5350]/40 text-[#ef5350] font-bold rounded-xl text-xs cursor-pointer transition-colors"
+                >
+                  حذف الحساب
+                </button>
+              )}
+              <button
+                onClick={() => setAccountInfoModalOpen(false)}
+                className="flex-1 py-2.5 bg-[#1976d2] hover:bg-[#1565c0] text-white font-bold rounded-xl text-xs cursor-pointer transition-colors"
+              >
+                إغلاق
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
