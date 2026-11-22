@@ -55,6 +55,22 @@ export interface Position {
   accountId: string;
 }
 
+export type PendingOrderType = 'buy_limit' | 'sell_limit' | 'buy_stop' | 'sell_stop';
+
+export interface PendingOrder {
+  id: string;
+  ticket: number;
+  symbol: string;
+  type: PendingOrderType;
+  lots: number;
+  targetPrice: number;
+  currentPrice: number;
+  sl?: number;
+  tp?: number;
+  createdAt: string;
+  accountId: string;
+}
+
 export interface Deal {
   id: string;
   ticket: number;

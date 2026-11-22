@@ -398,7 +398,12 @@ export const HistoryView: React.FC = () => {
           <div className="flex items-baseline justify-between">
             <span className="text-white shrink-0">الايداع:</span>
             <div className="flex-1 mx-2.5 border-b border-dotted border-[#464c58] self-center" />
-            <span dir="ltr" className="font-num font-bold text-white shrink-0">
+            <span
+              dir="ltr"
+              className={`font-num font-bold shrink-0 ${
+                totalDeposit < 0 ? 'text-[#ef5350]' : 'text-white'
+              }`}
+            >
               {totalDeposit.toFixed(2)}
             </span>
           </div>
@@ -419,7 +424,12 @@ export const HistoryView: React.FC = () => {
           <div className="flex items-baseline justify-between">
             <span className="text-white shrink-0">رصيد الحساب:</span>
             <div className="flex-1 mx-2.5 border-b border-dotted border-[#464c58] self-center" />
-            <span dir="ltr" className="font-num font-bold text-white shrink-0">
+            <span
+              dir="ltr"
+              className={`font-num font-bold shrink-0 ${
+                netBalance < 0 ? 'text-[#ef5350]' : 'text-white'
+              }`}
+            >
               {netBalance.toFixed(2)}
             </span>
           </div>
@@ -430,7 +440,7 @@ export const HistoryView: React.FC = () => {
              LEFT: Symbol, buy/sell lots & openPrice → closePrice
              RIGHT: Timestamp & Profit) */}
       <div className="flex-1 overflow-y-auto divide-y divide-[#181b21]">
-        {tradingDeals.length === 0 ? (
+        {(activeSubTab === 'orders' ? tradingDeals.length === 0 : filteredDeals.length === 0) ? (
           <div className="py-16 px-4 text-center text-[#8e9aa8]">
             <p className="text-sm font-semibold text-[#cfd8dc]">لا توجد صفقات في هذا التاريخ</p>
             {filterPeriod === 'custom' && (
@@ -468,7 +478,31 @@ export const HistoryView: React.FC = () => {
             );
           })
         ) : activeSubTab === 'deals' ? (
-          tradingDeals.map((deal: Deal) => {
+          filteredDeals.map((deal: Deal) => {
+            if (deal.type === 'deposit') {
+              return (
+                <div key={deal.id} dir="ltr" className="px-4 py-2.5 flex items-center justify-between hover:bg-[#0b0d11]">
+                  <div className="text-left">
+                    <div className="text-[15px] font-bold text-white leading-tight">
+                      رصيد الحساب
+                    </div>
+                    <div className="text-[12.5px] font-num text-[#9ea8b3] mt-0.5">
+                      {deal.comment && deal.comment !== 'رصيد الحساب' ? deal.comment : 'Balance'}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[11.5px] font-num text-[#9ea8b3]">{deal.closeTime}</div>
+                    <div
+                      className={`text-[14.5px] font-num font-bold mt-0.5 ${
+                        deal.profit >= 0 ? 'text-[#2196f3]' : 'text-[#ef5350]'
+                      }`}
+                    >
+                      {deal.profit.toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+              );
+            }
             const isBuy = deal.type === 'buy';
             const digits = getDigits(deal.symbol);
             const execPrice = deal.direction === 'in' ? deal.openPrice : deal.closePrice;
@@ -499,7 +533,44 @@ export const HistoryView: React.FC = () => {
             );
           })
         ) : (
-          tradingDeals.map((deal: Deal) => {
+          filteredDeals.map((deal: Deal) => {
+            if (deal.type === 'deposit') {
+              const isExpanded = expandedDealId === deal.id;
+              return (
+                <div
+                  key={deal.id}
+                  onClick={() => setExpandedDealId(isExpanded ? null : deal.id)}
+                  className="px-4 py-2.5 hover:bg-[#0b0d11] cursor-pointer"
+                >
+                  <div dir="ltr" className="flex items-center justify-between">
+                    <div className="text-left">
+                      <div className="text-[15px] font-bold text-white leading-tight">
+                        رصيد الحساب
+                      </div>
+                      <div className="text-[12.5px] font-num text-[#9ea8b3] mt-0.5">
+                        {deal.comment && deal.comment !== 'رصيد الحساب' ? deal.comment : 'Balance'}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[11.5px] font-num text-[#9ea8b3]">{deal.closeTime}</div>
+                      <div
+                        className={`text-[14.5px] font-num font-bold mt-0.5 ${
+                          deal.profit >= 0 ? 'text-[#2196f3]' : 'text-[#ef5350]'
+                        }`}
+                      >
+                        {deal.profit.toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                  {isExpanded && (
+                    <div className="mt-2 pt-2 border-t border-[#181b21] flex items-center justify-between text-[11px] text-[#8e9aa8] animate-fadeIn">
+                      <span>{deal.profit < 0 ? 'خصم من رصيد الحساب' : 'إيداع في الحساب'}</span>
+                      <span className="font-num">#{deal.ticket}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            }
             const isBuy = deal.type === 'buy';
             const digits = getDigits(deal.symbol);
             const isExpanded = expandedDealId === deal.id;

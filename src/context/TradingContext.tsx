@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
-import { Account, SymbolQuote, Candle, Position, Deal, MessageItem, TabType, Timeframe } from '../types/mt5';
+import { Account, SymbolQuote, Candle, Position, PendingOrder, PendingOrderType, Deal, MessageItem, TabType, Timeframe } from '../types/mt5';
 
 interface TradingContextType {
   activeAccount: Account;
@@ -14,8 +14,19 @@ interface TradingContextType {
   setTimeframe: (tf: Timeframe) => void;
   candles: Candle[];
   positions: Position[];
+  pendingOrders: PendingOrder[];
   historyDeals: Deal[];
   openTrade: (symbol: string, type: 'buy' | 'sell', lots: number, sl?: number, tp?: number) => boolean;
+  placePendingOrder: (
+    symbol: string,
+    type: PendingOrderType,
+    lots: number,
+    targetPrice: number,
+    sl?: number,
+    tp?: number
+  ) => boolean;
+  cancelPendingOrder: (orderId: string) => void;
+  modifyPendingOrder: (orderId: string, targetPrice: number, sl?: number, tp?: number) => void;
   closePosition: (positionId: string) => void;
   closeAllPositions: () => void;
   modifyPosition: (positionId: string, sl?: number, tp?: number) => void;
@@ -49,9 +60,26 @@ interface TradingContextType {
 
 // Balance calculation for "إسلام 1":
 // Initial Deposit: 127.00 (2026.11.10)
-// Trade 1 (2026.11.10 03:16): XAUUSDm buy 0.01 @ 4035.20 -> 4065.30 = +30.10 => Balance 157.10
-// Trade 2 (2026.11.11 05:31): XAUUSDm buy 0.01 @ 3981.10 -> 3965.20 = -15.90 => Balance 141.20
-// Trade 3 (2026.11.11 07:22): XAUUSDm sell 0.01 @ 3980.40 -> 3935.20 = +45.20 => Balance 186.40
+// 2026.11.10: +30.10 | 2026.11.11: -15.90 + 45.20 = +29.30
+// Total Balance = 127.00 + 30.10 + 29.30 = 186.40
+//
+// Balance calculation for "حسابي اسلام1":
+// 2026.11.10: +27.00 | 2026.11.11: +26.53 + 29.24 + 26.14 - 55.00 = +26.91
+// Net Total = 53.91
+const HESABI_ESLAM1_DEFAULT_ACCOUNT: Account = {
+  id: 'hesabi-eslam-1',
+  name: 'حسابي اسلام1',
+  broker: 'Exness Technologies Ltd',
+  server: 'Exness-MT5Real35',
+  accountNumber: '256476261',
+  balance: 53.91,
+  currency: 'USD',
+  type: 'real',
+  leverage: '1:2000',
+  logoType: 'exness',
+  lastKnownLabel: 'Standard · Access Point #3, Hedge'
+};
+
 const INITIAL_ACCOUNTS: Account[] = [
   {
     id: 'eslam-1-real',
@@ -66,6 +94,7 @@ const INITIAL_ACCOUNTS: Account[] = [
     logoType: 'exness',
     lastKnownLabel: 'Standard · Access Point #3, Hedge'
   },
+  HESABI_ESLAM1_DEFAULT_ACCOUNT,
   {
     id: 'exness-real-33',
     name: 'Standard',
@@ -381,6 +410,120 @@ function formatDateYMD(date: Date): string {
   return `${y}.${m}.${d}`;
 }
 
+function isHesabiEslam1Name(name?: string): boolean {
+  if (!name) return false;
+  const normalized = name
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي');
+  return normalized === 'حسابياسلام1';
+}
+
+function createHesabiEslam1Deals(accountId: string): Deal[] {
+  return [
+    // Day 1: 2026.11.10 -> Gold XAUUSDm Buy 0.01: 4030.30 -> 4057.30 (+27.00) at 04:31:12 AM
+    {
+      id: `hesabi-deal-4-${accountId}`,
+      ticket: 256476404,
+      orderTicket: 256476403,
+      symbol: 'XAUUSDm',
+      type: 'buy',
+      direction: 'out',
+      lots: 0.01,
+      openPrice: 4030.300,
+      closePrice: 4057.300,
+      swap: 0,
+      commission: 0,
+      profit: 27.00,
+      openTime: '2026.11.10 04:31:12',
+      closeTime: '2026.11.10 04:31:12',
+      status: 'FILLED',
+      accountId,
+      comment: 'إغلاق بربح'
+    },
+    // Day 2: 2026.11.11 -> Silver XAGUSDm Buy 0.01: 52.53 -> 53.06 (+26.53) at 12:14:59 PM
+    {
+      id: `hesabi-deal-5-${accountId}`,
+      ticket: 256476505,
+      orderTicket: 256476504,
+      symbol: 'XAGUSDm',
+      type: 'buy',
+      direction: 'out',
+      lots: 0.01,
+      openPrice: 52.530,
+      closePrice: 53.060,
+      swap: 0,
+      commission: 0,
+      profit: 26.53,
+      openTime: '2026.11.11 12:14:59',
+      closeTime: '2026.11.11 12:14:59',
+      status: 'FILLED',
+      accountId,
+      comment: 'إغلاق بربح'
+    },
+    // Day 2: 2026.11.11 -> Gold XAUUSDm Buy 0.01: 4035.00 -> 4064.31 (+29.24) at 12:17:13 PM
+    {
+      id: `hesabi-deal-6-${accountId}`,
+      ticket: 256476606,
+      orderTicket: 256476605,
+      symbol: 'XAUUSDm',
+      type: 'buy',
+      direction: 'out',
+      lots: 0.01,
+      openPrice: 4035.000,
+      closePrice: 4064.310,
+      swap: 0,
+      commission: 0,
+      profit: 29.24,
+      openTime: '2026.11.11 12:17:13',
+      closeTime: '2026.11.11 12:17:13',
+      status: 'FILLED',
+      accountId,
+      comment: 'إغلاق بربح'
+    },
+    // Day 2: 2026.11.11 -> Gold XAUUSDm Buy 0.01: 4039.00 -> 4065.21 (+26.14) at 12:17:16 PM
+    {
+      id: `hesabi-deal-7-${accountId}`,
+      ticket: 256476707,
+      orderTicket: 256476706,
+      symbol: 'XAUUSDm',
+      type: 'buy',
+      direction: 'out',
+      lots: 0.01,
+      openPrice: 4039.000,
+      closePrice: 4065.210,
+      swap: 0,
+      commission: 0,
+      profit: 26.14,
+      openTime: '2026.11.11 12:17:16',
+      closeTime: '2026.11.11 12:17:16',
+      status: 'FILLED',
+      accountId,
+      comment: 'إغلاق بربح'
+    },
+    // Day 2: 2026.11.11 -> Balance deduction -55.00 at 13:32:12 (1:32:12 PM)
+    {
+      id: `hesabi-balance-deduct-11-${accountId}`,
+      ticket: 256476808,
+      symbol: 'Balance',
+      type: 'deposit',
+      lots: 0,
+      openPrice: 0,
+      closePrice: 0,
+      swap: 0,
+      commission: 0,
+      profit: -55.00,
+      openTime: '2026.11.11 13:32:12',
+      closeTime: '2026.11.11 13:32:12',
+      status: 'FILLED',
+      accountId,
+      comment: 'رصيد الحساب'
+    }
+  ];
+}
+
 function createInitialHistory(): Deal[] {
   return [
     // === Account: إسلام 1 (eslam-1-real) ===
@@ -461,6 +604,8 @@ function createInitialHistory(): Deal[] {
       accountId: 'eslam-1-real',
       comment: 'إغلاق بربح'
     },
+    // === Account: حسابي اسلام1 (hesabi-eslam-1) ===
+    ...createHesabiEslam1Deals('hesabi-eslam-1'),
 
     // === Account: Standard Trial (exness-trial-16) ===
     {
@@ -662,8 +807,92 @@ function generateCandlesForSymbol(symbol: string, timeframe: Timeframe, targetBi
 
 const TradingContext = createContext<TradingContextType | undefined>(undefined);
 
+function ensureHesabiEslam1Migration(): void {
+  try {
+    const savedAccsRaw = localStorage.getItem('mt5_v3_accounts');
+    const savedDealsRaw = localStorage.getItem('mt5_v3_history_deals');
+
+    if (!savedAccsRaw) {
+      localStorage.setItem('mt5_eslam1_revert_v1', '1');
+      localStorage.setItem('mt5_hesabi_eslam1_seed_v1', '1');
+      localStorage.setItem('mt5_hesabi_eslam1_deals_v1', '1');
+      return;
+    }
+
+    const parsedAccs = JSON.parse(savedAccsRaw);
+    if (!Array.isArray(parsedAccs)) return;
+    let savedAccs: Account[] = parsedAccs;
+
+    let savedDeals: Deal[] = [];
+    if (savedDealsRaw) {
+      const parsedDeals = JSON.parse(savedDealsRaw);
+      if (Array.isArray(parsedDeals)) savedDeals = parsedDeals;
+    } else {
+      savedDeals = createInitialHistory();
+    }
+
+    let changed = false;
+
+    // 1. Revert accidental Nov 10-11 additions from eslam-1-real if previously applied
+    if (!localStorage.getItem('mt5_eslam1_revert_v1')) {
+      const accidentalIds = new Set([
+        'eslam1-deal-4',
+        'eslam1-deal-5',
+        'eslam1-deal-6',
+        'eslam1-deal-7',
+        'eslam1-balance-deduct-11'
+      ]);
+      const hadAccidental = savedDeals.some((d) => accidentalIds.has(d.id));
+      if (hadAccidental) {
+        savedDeals = savedDeals.filter((d) => !accidentalIds.has(d.id));
+        savedAccs = savedAccs.map((a) =>
+          a.id === 'eslam-1-real'
+            ? { ...a, balance: parseFloat((a.balance - 53.91).toFixed(2)) }
+            : a
+        );
+        changed = true;
+      }
+      localStorage.setItem('mt5_eslam1_revert_v1', '1');
+    }
+
+    // 2. Attach requested deals + balance deduction to the account named "حسابي اسلام1"
+    const existingHesabi = savedAccs.find((a) => isHesabiEslam1Name(a.name));
+    if (existingHesabi) {
+      if (!localStorage.getItem('mt5_hesabi_eslam1_deals_v1')) {
+        const hesabiDeals = createHesabiEslam1Deals(existingHesabi.id);
+        const existingIds = new Set(savedDeals.map((d) => d.id));
+        const toAdd = hesabiDeals.filter((d) => !existingIds.has(d.id));
+        if (toAdd.length > 0) {
+          savedDeals = [...toAdd, ...savedDeals];
+          const delta = parseFloat(toAdd.reduce((s, d) => s + d.profit, 0).toFixed(2));
+          savedAccs = savedAccs.map((a) =>
+            a.id === existingHesabi.id
+              ? { ...a, balance: parseFloat((a.balance + delta).toFixed(2)) }
+              : a
+          );
+          changed = true;
+        }
+        localStorage.setItem('mt5_hesabi_eslam1_deals_v1', '1');
+      }
+      localStorage.setItem('mt5_hesabi_eslam1_seed_v1', '1');
+    } else if (!localStorage.getItem('mt5_hesabi_eslam1_seed_v1')) {
+      savedAccs = [HESABI_ESLAM1_DEFAULT_ACCOUNT, ...savedAccs];
+      savedDeals = [...createHesabiEslam1Deals(HESABI_ESLAM1_DEFAULT_ACCOUNT.id), ...savedDeals];
+      localStorage.setItem('mt5_hesabi_eslam1_seed_v1', '1');
+      localStorage.setItem('mt5_hesabi_eslam1_deals_v1', '1');
+      changed = true;
+    }
+
+    if (changed) {
+      localStorage.setItem('mt5_v3_accounts', JSON.stringify(savedAccs));
+      localStorage.setItem('mt5_v3_history_deals', JSON.stringify(savedDeals));
+    }
+  } catch {}
+}
+
 export const TradingProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [accounts, setAccounts] = useState<Account[]>(() => {
+    ensureHesabiEslam1Migration();
     try {
       const saved = localStorage.getItem('mt5_v3_accounts');
       if (saved) {
@@ -704,12 +933,25 @@ export const TradingProvider: React.FC<{ children: ReactNode }> = ({ children })
     return INITIAL_POSITIONS;
   });
 
+  const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>(() => {
+    try {
+      const saved = localStorage.getItem('mt5_v3_pending_orders');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
+
   const [historyDeals, setHistoryDeals] = useState<Deal[]>(() => {
     try {
       const saved = localStorage.getItem('mt5_v3_history_deals');
       if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        const parsed: Deal[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
       }
     } catch {}
     return createInitialHistory();
@@ -740,9 +982,10 @@ export const TradingProvider: React.FC<{ children: ReactNode }> = ({ children })
       localStorage.setItem('mt5_v3_accounts', JSON.stringify(accounts));
       localStorage.setItem('mt5_v3_active_account_id', activeAccount.id);
       localStorage.setItem('mt5_v3_positions', JSON.stringify(positions));
+      localStorage.setItem('mt5_v3_pending_orders', JSON.stringify(pendingOrders));
       localStorage.setItem('mt5_v3_history_deals', JSON.stringify(historyDeals));
     } catch {}
-  }, [accounts, activeAccount.id, positions, historyDeals]);
+  }, [accounts, activeAccount.id, positions, pendingOrders, historyDeals]);
 
   useEffect(() => {
     let active = true;
@@ -862,6 +1105,65 @@ export const TradingProvider: React.FC<{ children: ReactNode }> = ({ children })
     );
   }, [quotes, selectedSymbol]);
 
+  useEffect(() => {
+    if (pendingOrders.length === 0) return;
+
+    const triggered: { order: PendingOrder; q: SymbolQuote }[] = [];
+    pendingOrders.forEach((order) => {
+      const q = quotes.find((item) => item.symbol === order.symbol);
+      if (!q) return;
+      const hit =
+        (order.type === 'buy_limit' && q.ask <= order.targetPrice) ||
+        (order.type === 'sell_limit' && q.bid >= order.targetPrice) ||
+        (order.type === 'buy_stop' && q.ask >= order.targetPrice) ||
+        (order.type === 'sell_stop' && q.bid <= order.targetPrice);
+      if (hit) {
+        triggered.push({ order, q });
+      }
+    });
+
+    if (triggered.length > 0) {
+      const triggeredIds = new Set(triggered.map((t) => t.order.id));
+      const now = new Date();
+      const timeFormatted = `${formatDateYMD(now)} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+      const newPositions: Position[] = triggered.map(({ order, q }) => {
+        const side: 'buy' | 'sell' = order.type.startsWith('buy') ? 'buy' : 'sell';
+        const execPrice = side === 'buy' ? q.ask : q.bid;
+        return {
+          id: `pos-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          ticket: order.ticket,
+          symbol: order.symbol,
+          type: side,
+          lots: order.lots,
+          openPrice: execPrice,
+          currentPrice: side === 'buy' ? q.bid : q.ask,
+          sl: order.sl,
+          tp: order.tp,
+          swap: 0,
+          commission: 0,
+          profit: 0,
+          openTime: timeFormatted,
+          accountId: order.accountId
+        };
+      });
+      setPendingOrders((prev) => prev.filter((o) => !triggeredIds.has(o.id)));
+      setPositions((prev) => [...newPositions, ...prev]);
+    } else {
+      setPendingOrders((prev) => {
+        let changed = false;
+        const next = prev.map((o) => {
+          const q = quotes.find((item) => item.symbol === o.symbol);
+          if (!q) return o;
+          const refPrice = o.type.startsWith('buy') ? q.ask : q.bid;
+          if (o.currentPrice === refPrice) return o;
+          changed = true;
+          return { ...o, currentPrice: refPrice };
+        });
+        return changed ? next : prev;
+      });
+    }
+  }, [quotes, pendingOrders]);
+
   const activePositions = positions.filter((p) => p.accountId === activeAccount.id);
   const totalProfit = parseFloat(activePositions.reduce((s, p) => s + p.profit, 0).toFixed(2));
   const equity = parseFloat((activeAccount.balance + totalProfit).toFixed(2));
@@ -912,6 +1214,91 @@ export const TradingProvider: React.FC<{ children: ReactNode }> = ({ children })
     [quotes, activeAccount.id]
   );
 
+  const placePendingOrder = useCallback(
+    (
+      symbol: string,
+      type: PendingOrderType,
+      lots: number,
+      targetPrice: number,
+      sl?: number,
+      tp?: number
+    ): boolean => {
+      const q = quotes.find((item) => item.symbol === symbol);
+      if (!q || !isFinite(targetPrice) || targetPrice <= 0) return false;
+      const now = new Date();
+      const timeFormatted = `${formatDateYMD(now)} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+      const ticket = Math.floor(2520000000 + Math.random() * 500000000);
+      const refPrice = type.startsWith('buy') ? q.ask : q.bid;
+
+      const newOrder: PendingOrder = {
+        id: `ord-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        ticket,
+        symbol,
+        type,
+        lots,
+        targetPrice: parseFloat(targetPrice.toFixed(q.digits)),
+        currentPrice: refPrice,
+        sl: sl && sl > 0 ? parseFloat(sl.toFixed(q.digits)) : undefined,
+        tp: tp && tp > 0 ? parseFloat(tp.toFixed(q.digits)) : undefined,
+        createdAt: timeFormatted,
+        accountId: activeAccount.id
+      };
+
+      setPendingOrders((prev) => [newOrder, ...prev]);
+      return true;
+    },
+    [quotes, activeAccount.id]
+  );
+
+  const cancelPendingOrder = useCallback(
+    (orderId: string) => {
+      const target = pendingOrders.find((o) => o.id === orderId);
+      if (!target) return;
+      const now = new Date();
+      const closeTimeFormatted = `${formatDateYMD(now)} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+      const canceledDeal: Deal = {
+        id: `deal-cancel-${Date.now()}`,
+        ticket: target.ticket,
+        orderTicket: target.ticket,
+        symbol: target.symbol,
+        type: target.type.startsWith('buy') ? 'buy' : 'sell',
+        direction: 'in',
+        lots: target.lots,
+        openPrice: target.targetPrice,
+        closePrice: target.currentPrice,
+        sl: target.sl,
+        tp: target.tp,
+        swap: 0,
+        commission: 0,
+        profit: 0,
+        openTime: target.createdAt,
+        closeTime: closeTimeFormatted,
+        status: 'CANCELED',
+        accountId: target.accountId,
+        comment: `Canceled ${target.type.replace('_', ' ')}`
+      };
+
+      setPendingOrders((prev) => prev.filter((o) => o.id !== orderId));
+      setHistoryDeals((prev) => [canceledDeal, ...prev]);
+    },
+    [pendingOrders]
+  );
+
+  const modifyPendingOrder = useCallback((orderId: string, targetPrice: number, sl?: number, tp?: number) => {
+    setPendingOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              targetPrice: targetPrice > 0 ? targetPrice : o.targetPrice,
+              sl: sl && sl > 0 ? sl : undefined,
+              tp: tp && tp > 0 ? tp : undefined
+            }
+          : o
+      )
+    );
+  }, []);
+
   const closePosition = useCallback(
     (positionId: string) => {
       const target = positions.find((p) => p.id === positionId);
@@ -945,10 +1332,17 @@ export const TradingProvider: React.FC<{ children: ReactNode }> = ({ children })
       setPositions((prev) => prev.filter((p) => p.id !== positionId));
       setHistoryDeals((prev) => [closedDeal, ...prev]);
 
-      const newBalance = parseFloat((activeAccount.balance + target.profit).toFixed(2));
-      const updatedAcc = { ...activeAccount, balance: newBalance };
-      setActiveAccountState(updatedAcc);
-      setAccounts((prev) => prev.map((a) => (a.id === updatedAcc.id ? updatedAcc : a)));
+      setAccounts((prev) =>
+        prev.map((a) =>
+          a.id === target.accountId
+            ? { ...a, balance: parseFloat((a.balance + target.profit).toFixed(2)) }
+            : a
+        )
+      );
+      if (activeAccount.id === target.accountId) {
+        const newBalance = parseFloat((activeAccount.balance + target.profit).toFixed(2));
+        setActiveAccountState((prev) => ({ ...prev, balance: newBalance }));
+      }
     },
     [positions, activeAccount]
   );
@@ -1085,6 +1479,9 @@ export const TradingProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
       return remaining;
     });
+    setPositions((prev) => prev.filter((p) => p.accountId !== accountId));
+    setPendingOrders((prev) => prev.filter((o) => o.accountId !== accountId));
+    setHistoryDeals((prev) => prev.filter((d) => d.accountId !== accountId));
   };
 
   const setActiveAccount = (account: Account) => {
@@ -1106,8 +1503,12 @@ export const TradingProvider: React.FC<{ children: ReactNode }> = ({ children })
         setTimeframe,
         candles,
         positions,
+        pendingOrders,
         historyDeals,
         openTrade,
+        placePendingOrder,
+        cancelPendingOrder,
+        modifyPendingOrder,
         closePosition,
         closeAllPositions,
         modifyPosition,

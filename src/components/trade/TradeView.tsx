@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useTrading } from '../../context/TradingContext';
-import { Position } from '../../types/mt5';
+import { Position, PendingOrder } from '../../types/mt5';
 
 export const TradeView: React.FC = () => {
   const {
     activeAccount,
     positions,
+    pendingOrders,
     quotes,
     totalProfit,
     equity,
@@ -14,6 +15,7 @@ export const TradeView: React.FC = () => {
     marginLevel,
     closePosition,
     closeAllPositions,
+    cancelPendingOrder,
     openOrderModal,
     setModifyingPosition,
     setModifyingFocus,
@@ -23,12 +25,14 @@ export const TradeView: React.FC = () => {
   } = useTrading();
 
   const [expandedPosId, setExpandedPosId] = useState<string | null>(null);
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [sortAsc, setSortAsc] = useState<boolean>(false);
   const [sortMenuOpen, setSortMenuOpen] = useState<boolean>(false);
   const [sortBy, setSortBy] = useState<'time' | 'profit' | 'symbol'>('time');
   const [bulkMenuOpen, setBulkMenuOpen] = useState<boolean>(false);
 
   const accountPositions = positions.filter((p) => p.accountId === activeAccount.id);
+  const accountPendingOrders = pendingOrders.filter((o) => o.accountId === activeAccount.id);
 
   const sortedPositions = [...accountPositions].sort((a, b) => {
     if (sortBy === 'profit') return sortAsc ? a.profit - b.profit : b.profit - a.profit;
@@ -214,12 +218,12 @@ export const TradeView: React.FC = () => {
         )}
       </div>
 
-      {/* 4. Active Positions List (Tap to expand inline details per PDF Page 1 Item 1) */}
+      {/* 4. Active Positions & Pending Orders List (Per Active Account) */}
       <div className="flex-1 overflow-y-auto divide-y divide-[#14161b]">
-        {sortedPositions.length === 0 ? (
+        {sortedPositions.length === 0 && accountPendingOrders.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 px-4 text-center text-[#8e9aa8]">
-            <p className="text-sm font-semibold text-[#cfd8dc]">لا توجد صفقات نشطة حالياً</p>
-            <p className="text-xs mt-1 text-[#707c8b]">اضغط على زر (+) في الأعلى لفتح صفقة جديدة</p>
+            <p className="text-sm font-semibold text-[#cfd8dc]">لا توجد صفقات أو أوامر نشطة في هذا الحساب</p>
+            <p className="text-xs mt-1 text-[#707c8b]">اضغط على زر (+) في الأعلى لفتح صفقة أو وضع أمر معلق</p>
             <button
               onClick={() => openOrderModal()}
               className="mt-4 px-5 py-2.5 bg-[#1976d2] hover:bg-[#1565c0] text-white font-bold rounded-xl text-xs cursor-pointer transition-colors"
@@ -228,7 +232,8 @@ export const TradeView: React.FC = () => {
             </button>
           </div>
         ) : (
-          sortedPositions.map((pos) => {
+          <>
+            {sortedPositions.map((pos) => {
             const digits = getDigits(pos.symbol);
             const isExpanded = expandedPosId === pos.id;
             const isPositive = pos.profit >= 0;
@@ -334,7 +339,99 @@ export const TradeView: React.FC = () => {
                 )}
               </div>
             );
-          })
+          })}
+
+            {accountPendingOrders.length > 0 && (
+              <>
+                <div className="px-4 py-1.5 bg-[#0b0d11] border-y border-[#181b21] flex items-center justify-between text-[12px] font-bold text-[#8e9aa8]">
+                  <span>الطلبات المعلقة ({accountPendingOrders.length})</span>
+                </div>
+                {accountPendingOrders.map((ord: PendingOrder) => {
+                  const digits = getDigits(ord.symbol);
+                  const isExpanded = expandedOrderId === ord.id;
+                  const isBuy = ord.type.startsWith('buy');
+                  return (
+                    <div
+                      key={ord.id}
+                      onClick={() => setExpandedOrderId(isExpanded ? null : ord.id)}
+                      className="px-4 py-2.5 bg-[#000000] hover:bg-[#0b0d11] transition-colors cursor-pointer"
+                    >
+                      <div dir="ltr" className="flex items-center justify-between">
+                        <div className="text-left">
+                          <div className="flex items-baseline gap-1.5 leading-tight">
+                            <span className="text-[14px] font-num font-bold text-white">{ord.symbol},</span>
+                            <span
+                              className={`text-[13px] font-num font-semibold ${
+                                isBuy ? 'text-[#2196f3]' : 'text-[#ef5350]'
+                              }`}
+                            >
+                              {ord.type.replace('_', ' ')} {ord.lots.toFixed(2)}
+                            </span>
+                          </div>
+                          <div className="text-[12px] font-num text-[#8e9aa8] mt-0.5 leading-tight">
+                            <span>{ord.targetPrice.toFixed(digits)}</span>
+                            <span className="mx-1 text-[#64707d]">→</span>
+                            <span className="text-[#b8c2cc]">{ord.currentPrice.toFixed(digits)}</span>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[12px] font-num font-semibold text-[#8e9aa8]">
+                            placed
+                          </span>
+                        </div>
+                      </div>
+
+                      {isExpanded && (
+                        <div
+                          className="mt-2.5 pt-2 border-t border-[#181b21] space-y-2 animate-fadeIn"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="text-[11px] font-num text-[#8e9aa8] text-right" dir="ltr">
+                            {ord.createdAt}
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11.5px] text-[#8e9aa8]">
+                            <div className="flex items-center justify-between">
+                              <span>وقف الخسارة:</span>
+                              <span className="font-num text-[#cfd8dc]">
+                                {ord.sl ? ord.sl.toFixed(digits) : '—'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span>T/P:</span>
+                              <span className="font-num text-[#cfd8dc]">
+                                {ord.tp ? ord.tp.toFixed(digits) : '—'}
+                              </span>
+                            </div>
+                            <div className="col-span-2 flex items-center justify-end font-num text-[#8e9aa8]">
+                              #{ord.ticket}
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 pt-1.5">
+                            <button
+                              onClick={() => cancelPendingOrder(ord.id)}
+                              className="py-2 bg-[#d32f2f] hover:bg-[#c62828] text-white font-bold rounded-lg text-[11px] cursor-pointer transition-colors"
+                            >
+                              حذف الأمر
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSelectedSymbol(ord.symbol);
+                                setActiveTab('chart');
+                              }}
+                              className="py-2 bg-[#161a22] hover:bg-[#1f2530] text-white font-bold rounded-lg text-[11px] border border-[#28303e] cursor-pointer transition-colors"
+                            >
+                              الرسم البياني
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </>
         )}
       </div>
     </div>

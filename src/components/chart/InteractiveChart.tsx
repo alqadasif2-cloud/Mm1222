@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { useTrading } from '../../context/TradingContext';
-import { Timeframe, Position } from '../../types/mt5';
+import { Timeframe, Position, PendingOrder, PendingOrderType } from '../../types/mt5';
 
 export const InteractiveChart: React.FC = () => {
   const {
+    activeAccount,
     quotes,
     selectedSymbol,
     setSelectedSymbol,
@@ -11,7 +12,10 @@ export const InteractiveChart: React.FC = () => {
     setTimeframe,
     candles,
     positions,
+    pendingOrders,
     openTrade,
+    placePendingOrder,
+    cancelPendingOrder,
     closePosition,
     setModifyingPosition,
     setModifyingFocus,
@@ -36,6 +40,13 @@ export const InteractiveChart: React.FC = () => {
   const [radialPos, setRadialPos] = useState<{ x: number; y: number }>({ x: 180, y: 240 });
   const [tradeToast, setTradeToast] = useState<string | null>(null);
 
+  // Pending Order (Buy Limit / Sell Limit) Chart Placement Mode
+  const [pendingOrderMode, setPendingOrderMode] = useState<boolean>(false);
+  const [pendingType, setPendingType] = useState<PendingOrderType>('buy_limit');
+  const [pendingPrice, setPendingPrice] = useState<number>(0);
+  const [pendingSl, setPendingSl] = useState<string>('');
+  const [pendingTp, setPendingTp] = useState<string>('');
+
   // Interactive Zoom & Pan States (X-axis zoom, X-axis scroll, Y-axis right-edge scale & vertical offset)
   const [visibleCount, setVisibleCount] = useState<number>(64);
   const [scrollOffset, setScrollOffset] = useState<number>(0); // candles shifted from right edge
@@ -43,15 +54,16 @@ export const InteractiveChart: React.FC = () => {
   const [yShiftRatio, setYShiftRatio] = useState<number>(0); // vertical pan ratio
   const [cursorStyle, setCursorStyle] = useState<string>('crosshair');
 
-  // Selected Position on chart for SL/TP Quick Action Bar (PDF Page 2 Item 4)
+  // Selected Position or Pending Order on chart for Quick Action Bar
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [selectedPendingOrderId, setSelectedPendingOrderId] = useState<string | null>(null);
 
   // Live candle countdown timer
   const [candleSecondsRemaining, setCandleSecondsRemaining] = useState<number>(54);
 
   // Interaction refs (mouse & multi-touch pinch/drag)
   const dragRef = useRef<{
-    mode: 'none' | 'pan' | 'y-scale' | 'crosshair';
+    mode: 'none' | 'pan' | 'y-scale' | 'crosshair' | 'pending-line';
     startX: number;
     startY: number;
     startScrollOffset: number;
@@ -99,8 +111,13 @@ export const InteractiveChart: React.FC = () => {
   );
 
   const symbolPositions = useMemo(
-    () => positions.filter((p) => p.symbol === selectedSymbol),
-    [positions, selectedSymbol]
+    () => positions.filter((p) => p.accountId === activeAccount.id && p.symbol === selectedSymbol),
+    [positions, activeAccount.id, selectedSymbol]
+  );
+
+  const symbolPendingOrders = useMemo(
+    () => pendingOrders.filter((o) => o.accountId === activeAccount.id && o.symbol === selectedSymbol),
+    [pendingOrders, activeAccount.id, selectedSymbol]
   );
 
   const selectedOrder: Position | null = useMemo(() => {
@@ -108,13 +125,20 @@ export const InteractiveChart: React.FC = () => {
     return symbolPositions.find((p) => p.id === selectedOrderId) || null;
   }, [selectedOrderId, symbolPositions]);
 
-  // Reset chart offset when symbol changes
+  const selectedPendingOrder: PendingOrder | null = useMemo(() => {
+    if (!selectedPendingOrderId) return null;
+    return symbolPendingOrders.find((o) => o.id === selectedPendingOrderId) || null;
+  }, [selectedPendingOrderId, symbolPendingOrders]);
+
+  // Reset chart selections when symbol or account changes
   useEffect(() => {
     setScrollOffset(0);
     setYScale(1.0);
     setYShiftRatio(0);
     setSelectedOrderId(null);
-  }, [selectedSymbol]);
+    setSelectedPendingOrderId(null);
+    setPendingOrderMode(false);
+  }, [selectedSymbol, activeAccount.id]);
 
   // Real-time countdown based on timeframe
   useEffect(() => {
@@ -413,6 +437,66 @@ export const InteractiveChart: React.FC = () => {
       }
     });
 
+    // Draw Placed Pending Orders (Buy Limit / Sell Limit / Buy Stop / Sell Stop) for Active Account
+    symbolPendingOrders.forEach((ord) => {
+      const ordY = getY(ord.targetPrice);
+      const isBuy = ord.type.startsWith('buy');
+      const isSelected = selectedPendingOrder?.id === ord.id;
+      const lineColor = isBuy ? '#2196f3' : '#ef5350';
+
+      ctx.strokeStyle = lineColor;
+      ctx.lineWidth = isSelected ? 1.8 : 1.1;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, ordY);
+      ctx.lineTo(chartWidth, ordY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const labelText = `${ord.type.replace('_', ' ').toUpperCase()} ${ord.lots.toFixed(2)}`;
+      ctx.font = 'bold 10px "Roboto", sans-serif';
+      const m = ctx.measureText(labelText);
+      ctx.fillStyle = '#090b0e';
+      ctx.fillRect(4, ordY - 14, m.width + 8, 13);
+      ctx.fillStyle = lineColor;
+      ctx.textAlign = 'left';
+      ctx.fillText(labelText, 8, ordY - 4);
+    });
+
+    // Draw Interactive Pending Order Placement Line (when Buy Limit / Sell Limit mode is active)
+    if (pendingOrderMode && pendingPrice > 0) {
+      const pY = getY(pendingPrice);
+      const isBuy = pendingType.startsWith('buy');
+      const activeColor = isBuy ? '#3897f0' : '#ef5350';
+
+      ctx.strokeStyle = activeColor;
+      ctx.lineWidth = 1.8;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, pY);
+      ctx.lineTo(chartWidth, pY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Drag handle circle on chart
+      ctx.fillStyle = activeColor;
+      ctx.beginPath();
+      ctx.arc(chartWidth - 18, pY, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      const tag = `${pendingType.replace('_', ' ').toUpperCase()} ${lotSize.toFixed(2)}  ↕`;
+      ctx.font = 'bold 10.5px "Roboto", sans-serif';
+      const tm = ctx.measureText(tag);
+      ctx.fillStyle = activeColor;
+      ctx.fillRect(6, pY - 17, tm.width + 12, 15);
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'left';
+      ctx.fillText(tag, 12, pY - 6);
+    }
+
     // Current Price Horizontal Line (subtle light gray line across chart like screenshot)
     const yBid = getY(currentQuote.bid);
     ctx.strokeStyle = '#788492';
@@ -449,6 +533,30 @@ export const InteractiveChart: React.FC = () => {
         }
       }
     });
+
+    // Draw Right Axis Badges for Placed Pending Orders
+    symbolPendingOrders.forEach((ord) => {
+      const ordY = getY(ord.targetPrice);
+      if (ordY >= topMargin && ordY <= topMargin + mainChartHeight) {
+        ctx.fillStyle = ord.type.startsWith('buy') ? '#1976d2' : '#d32f2f';
+        ctx.fillRect(chartWidth + 2, ordY - 9, rightMargin - 4, 18);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 10px "Roboto", sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(ord.targetPrice.toFixed(currentQuote.digits), chartWidth + 6, ordY + 3.5);
+      }
+    });
+
+    // Draw Right Axis Badge for Active Placement Line
+    if (pendingOrderMode && pendingPrice > 0) {
+      const pY = Math.max(topMargin + 9, Math.min(getY(pendingPrice), topMargin + mainChartHeight - 9));
+      ctx.fillStyle = pendingType.startsWith('buy') ? '#3897f0' : '#ef5350';
+      ctx.fillRect(chartWidth + 2, pY - 10, rightMargin - 4, 20);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 10.5px "Roboto", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(pendingPrice.toFixed(currentQuote.digits), chartWidth + 6, pY + 4);
+    }
 
     // Iconic Teal Current Price + Countdown Timer Badge on Right Axis (Exact match to screenshot!)
     const badgeH = 30;
@@ -555,8 +663,21 @@ export const InteractiveChart: React.FC = () => {
     currentQuote,
     candleSecondsRemaining,
     symbolPositions,
-    selectedOrder
+    symbolPendingOrders,
+    selectedOrder,
+    selectedPendingOrder,
+    pendingOrderMode,
+    pendingType,
+    pendingPrice,
+    lotSize
   ]);
+
+  // Helper: Convert Y pixel coordinate on canvas to chart price
+  const yToPrice = (y: number): number => {
+    const { topMargin, mainChartHeight, paddedMin, fullRange } = layoutRef.current;
+    const clampedY = Math.min(Math.max(y, topMargin), topMargin + mainChartHeight);
+    return paddedMin + (1 - (clampedY - topMargin) / mainChartHeight) * fullRange;
+  };
 
   // Helper: Check if user tapped near any open order line (Entry / SL / TP)
   const hitTestOrderAtY = (y: number): Position | null => {
@@ -566,6 +687,15 @@ export const InteractiveChart: React.FC = () => {
       if (Math.abs(priceToY(pos.openPrice) - y) < 18) return pos;
       if (pos.tp && Math.abs(priceToY(pos.tp) - y) < 18) return pos;
       if (pos.sl && Math.abs(priceToY(pos.sl) - y) < 18) return pos;
+    }
+    return null;
+  };
+
+  const hitTestPendingOrderAtY = (y: number): PendingOrder | null => {
+    const { topMargin, mainChartHeight, paddedMin, fullRange } = layoutRef.current;
+    const priceToY = (p: number) => topMargin + (1 - (p - paddedMin) / fullRange) * mainChartHeight;
+    for (const ord of symbolPendingOrders) {
+      if (Math.abs(priceToY(ord.targetPrice) - y) < 18) return ord;
     }
     return null;
   };
@@ -583,6 +713,23 @@ export const InteractiveChart: React.FC = () => {
 
     canvas.setPointerCapture(e.pointerId);
     const isRightAxis = x >= layoutRef.current.chartWidth;
+
+    if (pendingOrderMode && !isRightAxis && pendingPrice > 0) {
+      const { topMargin, mainChartHeight, paddedMin, fullRange } = layoutRef.current;
+      const lineY = topMargin + (1 - (pendingPrice - paddedMin) / fullRange) * mainChartHeight;
+      if (Math.abs(y - lineY) < 28) {
+        dragRef.current = {
+          mode: 'pending-line',
+          startX: x,
+          startY: y,
+          startScrollOffset: scrollOffset,
+          startYScale: yScale,
+          startYShift: yShiftRatio,
+          moved: false
+        };
+        return;
+      }
+    }
 
     if (crosshairActive && !isRightAxis) {
       setCrosshairPos({ x, y });
@@ -620,6 +767,8 @@ export const InteractiveChart: React.FC = () => {
     if (dragRef.current.mode === 'none') {
       if (x >= layoutRef.current.chartWidth) {
         setCursorStyle('ns-resize');
+      } else if (pendingOrderMode) {
+        setCursorStyle('row-resize');
       } else if (crosshairActive) {
         setCursorStyle('crosshair');
       } else {
@@ -634,6 +783,17 @@ export const InteractiveChart: React.FC = () => {
     const dy = y - dragRef.current.startY;
     if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
       dragRef.current.moved = true;
+    }
+
+    if (dragRef.current.mode === 'pending-line') {
+      const nextPrice = parseFloat(Math.max(0.0001, yToPrice(y)).toFixed(currentQuote.digits));
+      setPendingPrice(nextPrice);
+      if (pendingType === 'buy_limit' || pendingType === 'sell_limit') {
+        setPendingType(nextPrice <= currentQuote.bid ? 'buy_limit' : 'sell_limit');
+      } else {
+        setPendingType(nextPrice >= currentQuote.ask ? 'buy_stop' : 'sell_stop');
+      }
+      return;
     }
 
     if (dragRef.current.mode === 'crosshair') {
@@ -671,9 +831,9 @@ export const InteractiveChart: React.FC = () => {
     const wasMoved = dragRef.current.moved;
     const mode = dragRef.current.mode;
     dragRef.current.mode = 'none';
-    setCursorStyle(crosshairActive ? 'crosshair' : 'grab');
+    setCursorStyle(crosshairActive ? 'crosshair' : pendingOrderMode ? 'row-resize' : 'grab');
 
-    if (wasMoved || pinchRef.current.active || mode === 'y-scale' || mode === 'crosshair') {
+    if (wasMoved || pinchRef.current.active || mode === 'y-scale' || mode === 'crosshair' || mode === 'pending-line') {
       return;
     }
 
@@ -688,17 +848,40 @@ export const InteractiveChart: React.FC = () => {
       return;
     }
 
-    // Check if user tapped an active order line (Entry / SL / TP)
+    // If Pending Order placement mode is active, tapping sets the Buy Limit / Sell Limit line at that price
+    if (pendingOrderMode && x < layoutRef.current.chartWidth) {
+      const nextPrice = parseFloat(Math.max(0.0001, yToPrice(y)).toFixed(currentQuote.digits));
+      setPendingPrice(nextPrice);
+      if (pendingType === 'buy_limit' || pendingType === 'sell_limit') {
+        setPendingType(nextPrice <= currentQuote.bid ? 'buy_limit' : 'sell_limit');
+      } else {
+        setPendingType(nextPrice >= currentQuote.ask ? 'buy_stop' : 'sell_stop');
+      }
+      return;
+    }
+
+    // Check if user tapped an active position line (Entry / SL / TP)
     const hitOrder = hitTestOrderAtY(y);
     if (hitOrder) {
+      setSelectedPendingOrderId(null);
       setSelectedOrderId(selectedOrder?.id === hitOrder.id ? null : hitOrder.id);
       setShowRadialMenu(false);
       return;
     }
 
-    // Otherwise toggle radial timeframe wheel or dismiss order bar
-    if (selectedOrderId) {
+    // Check if user tapped an existing pending order line
+    const hitPending = hitTestPendingOrderAtY(y);
+    if (hitPending) {
       setSelectedOrderId(null);
+      setSelectedPendingOrderId(selectedPendingOrder?.id === hitPending.id ? null : hitPending.id);
+      setShowRadialMenu(false);
+      return;
+    }
+
+    // Otherwise dismiss active order bar or open radial timeframe wheel
+    if (selectedOrderId || selectedPendingOrderId) {
+      setSelectedOrderId(null);
+      setSelectedPendingOrderId(null);
       return;
     }
 
@@ -779,6 +962,58 @@ export const InteractiveChart: React.FC = () => {
       ? 'bg-[#d32f2f] hover:bg-[#c62828]'
       : 'bg-[#1976d2] hover:bg-[#1565c0]';
 
+  const togglePendingOrderMode = () => {
+    if (pendingOrderMode) {
+      setPendingOrderMode(false);
+      return;
+    }
+    const { fullRange } = layoutRef.current;
+    const step = fullRange > 0 ? fullRange * 0.16 : currentQuote.bid * 0.005;
+    const initialPrice = parseFloat(Math.max(0.0001, currentQuote.bid - step).toFixed(currentQuote.digits));
+    setPendingType('buy_limit');
+    setPendingPrice(initialPrice);
+    setPendingSl('');
+    setPendingTp('');
+    setShowRadialMenu(false);
+    setShowQuickSymbols(false);
+    setSelectedOrderId(null);
+    setSelectedPendingOrderId(null);
+    setPendingOrderMode(true);
+  };
+
+  const selectPendingOrderType = (nextType: PendingOrderType) => {
+    setPendingType(nextType);
+    const { fullRange } = layoutRef.current;
+    const step = fullRange > 0 ? fullRange * 0.16 : currentQuote.bid * 0.005;
+    if (nextType === 'buy_limit' || nextType === 'sell_stop') {
+      if (pendingPrice >= currentQuote.bid || pendingPrice <= 0) {
+        setPendingPrice(parseFloat(Math.max(0.0001, currentQuote.bid - step).toFixed(currentQuote.digits)));
+      }
+    } else {
+      if (pendingPrice <= currentQuote.ask || pendingPrice <= 0) {
+        setPendingPrice(parseFloat((currentQuote.ask + step).toFixed(currentQuote.digits)));
+      }
+    }
+  };
+
+  const handleConfirmPendingOrder = () => {
+    if (pendingPrice <= 0) return;
+    const ok = placePendingOrder(
+      selectedSymbol,
+      pendingType,
+      lotSize,
+      pendingPrice,
+      pendingSl ? parseFloat(pendingSl) : undefined,
+      pendingTp ? parseFloat(pendingTp) : undefined
+    );
+    if (ok) {
+      const label = pendingType.replace('_', ' ').toUpperCase();
+      setTradeToast(`تم وضع أمر ${label} ${lotSize.toFixed(2)} لوت عند ${pendingPrice.toFixed(currentQuote.digits)}`);
+      setTimeout(() => setTradeToast(null), 3200);
+      setPendingOrderMode(false);
+    }
+  };
+
   const toggleRadialFromToolbar = () => {
     if (showRadialMenu) {
       setShowRadialMenu(false);
@@ -794,6 +1029,7 @@ export const InteractiveChart: React.FC = () => {
     radialOpenedAtRef.current = Date.now();
     setShowQuickSymbols(false);
     setSelectedOrderId(null);
+    setSelectedPendingOrderId(null);
     setShowRadialMenu(true);
   };
 
@@ -823,12 +1059,14 @@ export const InteractiveChart: React.FC = () => {
             </svg>
           </button>
 
-          {/* Icon 2: Two-Tone Timeframe Pie/Clock Circle */}
+          {/* Icon 2: Pending Order Placement (Buy Limit / Sell Limit on Chart) */}
           <button
-            onClick={toggleRadialFromToolbar}
-            aria-label="الفريم الزمني"
-            title="تغيير الفريم الزمني"
-            className="min-w-[40px] min-h-[40px] flex items-center justify-center hover:opacity-85 transition-opacity cursor-pointer"
+            onClick={togglePendingOrderMode}
+            aria-label="تحديد طلبات الشراء والبيع (Buy Limit / Sell Limit)"
+            title="تحديد أوامر Buy Limit / Sell Limit"
+            className={`min-w-[40px] min-h-[40px] rounded-lg flex items-center justify-center transition-all cursor-pointer ${
+              pendingOrderMode ? 'bg-[#3897f0]/20 ring-1 ring-[#3897f0]' : 'hover:opacity-85'
+            }`}
           >
             <svg viewBox="0 0 24 24" className="w-[22px] h-[22px]">
               <path
@@ -850,10 +1088,11 @@ export const InteractiveChart: React.FC = () => {
             </svg>
           </button>
 
-          {/* Icon 3: Timeframe Text (e.g. M15) */}
+          {/* Icon 3: Timeframe Text (e.g. M15) -> Opens Radial Timeframe Wheel */}
           <button
             onClick={toggleRadialFromToolbar}
             aria-label="اختر الإطار الزمني"
+            title="تغيير الإطار الزمني"
             className="min-w-[40px] min-h-[40px] flex items-center justify-center font-num font-bold text-[15px] text-white tracking-wide hover:text-[#64b5f6] transition-colors cursor-pointer"
           >
             {timeframe}
@@ -912,69 +1151,174 @@ export const InteractiveChart: React.FC = () => {
         </button>
       </header>
 
-      {/* 2. ONE-CLICK QUICK TRADING BAR (SELL | ⌄ 0.01 ˄ | BUY — matching Screenshot) */}
-      {showOneClick && (
-        <div dir="ltr" className="bg-[#090b0e] flex items-stretch h-12 z-20 shrink-0 border-b border-[#181b21]">
-          {/* SELL Button (Left) */}
-          <button
-            onClick={() => handleQuickTrade('sell')}
-            className={`flex-1 ${tickColorClass} text-white px-2.5 flex flex-col justify-center transition-colors cursor-pointer`}
-          >
-            <span className="text-[10px] font-medium tracking-wider text-white/90 text-left leading-none">
-              SELL
-            </span>
-            <div className="flex items-baseline justify-center gap-0.5 mt-0.5 font-num leading-none">
-              <span className="text-[15px] font-medium">{sellFmt.main}</span>
-              <span className="text-[21px] font-bold tracking-tight">{sellFmt.big}</span>
-              {sellFmt.sup && <sup className="text-[11px] font-bold -top-1.5">{sellFmt.sup}</sup>}
+      {/* 2. PENDING ORDER PLACEMENT BAR (Buy Limit / Sell Limit) OR ONE-CLICK QUICK TRADING BAR */}
+      {pendingOrderMode ? (
+        <div dir="ltr" className="bg-[#0e1117] border-y border-[#232834] px-2.5 py-2 z-20 shrink-0 space-y-2 animate-fadeIn">
+          {/* Row 1: Order Type Selector + Cancel */}
+          <div className="flex items-center justify-between gap-1.5">
+            <div className="flex items-center gap-1 flex-1 overflow-x-auto scrollbar-none">
+              {(
+                [
+                  { id: 'buy_limit', label: 'Buy Limit', color: 'bg-[#1976d2] text-white' },
+                  { id: 'sell_limit', label: 'Sell Limit', color: 'bg-[#d32f2f] text-white' },
+                  { id: 'buy_stop', label: 'Buy Stop', color: 'bg-[#1565c0] text-white' },
+                  { id: 'sell_stop', label: 'Sell Stop', color: 'bg-[#c62828] text-white' }
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => selectPendingOrderType(opt.id)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-num font-bold whitespace-nowrap cursor-pointer transition-colors ${
+                    pendingType === opt.id
+                      ? opt.color
+                      : 'bg-[#171b24] text-[#8e9aa8] hover:text-white border border-[#262c38]'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
-          </button>
-
-          {/* Lot Stepper (Center) */}
-          <div className="w-[42%] max-w-[175px] bg-[#0a0c10] px-2 flex items-center justify-between border-x border-[#161920]">
             <button
-              onClick={() => setLotSize((p) => Math.max(0.01, parseFloat((p - 0.01).toFixed(2))))}
-              aria-label="إنقاص اللوت"
-              className="w-9 h-10 flex items-center justify-center text-[#cfd8dc] hover:text-white cursor-pointer"
+              onClick={() => setPendingOrderMode(false)}
+              aria-label="إغلاق وضع الأوامر المعلقة"
+              className="w-7 h-7 rounded-full bg-[#1a1e28] text-[#8e9aa8] hover:text-white text-xs flex items-center justify-center shrink-0 cursor-pointer"
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" className="w-4 h-4">
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-            </button>
-            <input
-              type="number"
-              step="0.01"
-              min="0.01"
-              value={lotSize}
-              onChange={(e) => setLotSize(Math.max(0.01, parseFloat(e.target.value) || 0.01))}
-              className="w-14 text-center bg-transparent text-white font-num font-semibold text-[15px] outline-none"
-            />
-            <button
-              onClick={() => setLotSize((p) => parseFloat((p + 0.01).toFixed(2)))}
-              aria-label="زيادة اللوت"
-              className="w-9 h-10 flex items-center justify-center text-[#cfd8dc] hover:text-white cursor-pointer"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" className="w-4 h-4">
-                <polyline points="18 15 12 9 6 15" />
-              </svg>
+              ✕
             </button>
           </div>
 
-          {/* BUY Button (Right) */}
-          <button
-            onClick={() => handleQuickTrade('buy')}
-            className={`flex-1 ${tickColorClass} text-white px-2.5 flex flex-col justify-center transition-colors cursor-pointer`}
-          >
-            <span className="text-[10px] font-medium tracking-wider text-white/90 text-left leading-none">
-              BUY
-            </span>
-            <div className="flex items-baseline justify-center gap-0.5 mt-0.5 font-num leading-none">
-              <span className="text-[15px] font-medium">{buyFmt.main}</span>
-              <span className="text-[21px] font-bold tracking-tight">{buyFmt.big}</span>
-              {buyFmt.sup && <sup className="text-[11px] font-bold -top-1.5">{buyFmt.sup}</sup>}
+          {/* Row 2: Lots + Target Price + SL/TP + Confirm */}
+          <div className="flex items-center gap-1.5">
+            {/* Lots */}
+            <div className="flex items-center bg-[#090b0e] border border-[#242934] rounded-lg h-8 px-1 shrink-0">
+              <button
+                onClick={() => setLotSize((p) => Math.max(0.01, parseFloat((p - 0.01).toFixed(2))))}
+                className="w-5 text-[#8e9aa8] hover:text-white font-bold cursor-pointer"
+              >
+                -
+              </button>
+              <span className="w-10 text-center text-[11px] font-num font-bold text-white">
+                {lotSize.toFixed(2)}
+              </span>
+              <button
+                onClick={() => setLotSize((p) => parseFloat((p + 0.01).toFixed(2)))}
+                className="w-5 text-[#8e9aa8] hover:text-white font-bold cursor-pointer"
+              >
+                +
+              </button>
             </div>
-          </button>
+
+            {/* Target Price */}
+            <div className="flex-1 min-w-0">
+              <input
+                type="number"
+                step="any"
+                value={pendingPrice || ''}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  if (!isNaN(v)) setPendingPrice(v);
+                }}
+                aria-label="سعر الأمر المعلق"
+                placeholder="Price"
+                className="w-full h-8 bg-[#090b0e] border border-[#3897f0]/60 rounded-lg px-2 text-center text-[12px] font-num font-bold text-white outline-none"
+              />
+            </div>
+
+            {/* SL & TP */}
+            <input
+              type="number"
+              step="any"
+              value={pendingSl}
+              onChange={(e) => setPendingSl(e.target.value)}
+              placeholder="SL"
+              className="w-16 h-8 bg-[#090b0e] border border-[#ff7043]/40 rounded-lg px-1.5 text-center text-[11px] font-num text-white outline-none"
+            />
+            <input
+              type="number"
+              step="any"
+              value={pendingTp}
+              onChange={(e) => setPendingTp(e.target.value)}
+              placeholder="TP"
+              className="w-16 h-8 bg-[#090b0e] border border-[#26a69a]/40 rounded-lg px-1.5 text-center text-[11px] font-num text-white outline-none"
+            />
+
+            {/* Place Order Button */}
+            <button
+              onClick={handleConfirmPendingOrder}
+              className={`h-8 px-3 rounded-lg font-bold text-[11px] text-white shrink-0 cursor-pointer transition-colors ${
+                pendingType.startsWith('buy')
+                  ? 'bg-[#1976d2] hover:bg-[#1565c0]'
+                  : 'bg-[#d32f2f] hover:bg-[#c62828]'
+              }`}
+            >
+              وضع الأمر
+            </button>
+          </div>
         </div>
+      ) : (
+        showOneClick && (
+          <div dir="ltr" className="bg-[#090b0e] flex items-stretch h-12 z-20 shrink-0 border-b border-[#181b21]">
+            {/* SELL Button (Left) */}
+            <button
+              onClick={() => handleQuickTrade('sell')}
+              className={`flex-1 ${tickColorClass} text-white px-2.5 flex flex-col justify-center transition-colors cursor-pointer`}
+            >
+              <span className="text-[10px] font-medium tracking-wider text-white/90 text-left leading-none">
+                SELL
+              </span>
+              <div className="flex items-baseline justify-center gap-0.5 mt-0.5 font-num leading-none">
+                <span className="text-[15px] font-medium">{sellFmt.main}</span>
+                <span className="text-[21px] font-bold tracking-tight">{sellFmt.big}</span>
+                {sellFmt.sup && <sup className="text-[11px] font-bold -top-1.5">{sellFmt.sup}</sup>}
+              </div>
+            </button>
+
+            {/* Lot Stepper (Center) */}
+            <div className="w-[42%] max-w-[175px] bg-[#0a0c10] px-2 flex items-center justify-between border-x border-[#161920]">
+              <button
+                onClick={() => setLotSize((p) => Math.max(0.01, parseFloat((p - 0.01).toFixed(2))))}
+                aria-label="إنقاص اللوت"
+                className="w-9 h-10 flex items-center justify-center text-[#cfd8dc] hover:text-white cursor-pointer"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" className="w-4 h-4">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                value={lotSize}
+                onChange={(e) => setLotSize(Math.max(0.01, parseFloat(e.target.value) || 0.01))}
+                className="w-14 text-center bg-transparent text-white font-num font-semibold text-[15px] outline-none"
+              />
+              <button
+                onClick={() => setLotSize((p) => parseFloat((p + 0.01).toFixed(2)))}
+                aria-label="زيادة اللوت"
+                className="w-9 h-10 flex items-center justify-center text-[#cfd8dc] hover:text-white cursor-pointer"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" className="w-4 h-4">
+                  <polyline points="18 15 12 9 6 15" />
+                </svg>
+              </button>
+            </div>
+
+            {/* BUY Button (Right) */}
+            <button
+              onClick={() => handleQuickTrade('buy')}
+              className={`flex-1 ${tickColorClass} text-white px-2.5 flex flex-col justify-center transition-colors cursor-pointer`}
+            >
+              <span className="text-[10px] font-medium tracking-wider text-white/90 text-left leading-none">
+                BUY
+              </span>
+              <div className="flex items-baseline justify-center gap-0.5 mt-0.5 font-num leading-none">
+                <span className="text-[15px] font-medium">{buyFmt.main}</span>
+                <span className="text-[21px] font-bold tracking-tight">{buyFmt.big}</span>
+                {buyFmt.sup && <sup className="text-[11px] font-bold -top-1.5">{buyFmt.sup}</sup>}
+              </div>
+            </button>
+          </div>
+        )
       )}
 
       {/* 3. MAIN CHART CANVAS AREA */}
@@ -1025,8 +1369,8 @@ export const InteractiveChart: React.FC = () => {
           </div>
         )}
 
-        {/* Active Orders Quick-Select Chip (If current symbol has open positions and bar isn't open) */}
-        {symbolPositions.length > 0 && !selectedOrder && (
+        {/* Active Orders Quick-Select Chip (Only for activeAccount & current symbol) */}
+        {symbolPositions.length > 0 && !selectedOrder && !selectedPendingOrder && (
           <button
             onClick={() => setSelectedOrderId(symbolPositions[0].id)}
             className="absolute bottom-8 left-2.5 z-20 bg-[#161920]/90 hover:bg-[#1f242e] border border-[#2c3340] px-2.5 py-1 rounded-md text-[11px] font-num text-[#cfd8dc] flex items-center gap-2 cursor-pointer transition-colors"
@@ -1118,6 +1462,36 @@ export const InteractiveChart: React.FC = () => {
               className="w-8 h-8 rounded-full bg-[#242933] hover:bg-[#303744] text-white flex items-center justify-center text-sm cursor-pointer"
             >
               →
+            </button>
+          </div>
+        )}
+
+        {/* Floating Bottom Quick-Action Bar for Selected Pending Order */}
+        {selectedPendingOrder && (
+          <div
+            dir="rtl"
+            className="absolute bottom-8 left-1/2 -translate-x-1/2 z-30 bg-[#181b21]/95 border border-[#2b303a] rounded-full px-3 py-1.5 flex items-center gap-2.5 shadow-2xl animate-scaleIn"
+          >
+            <button
+              onClick={() => setSelectedPendingOrderId(null)}
+              aria-label="إلغاء"
+              className="w-8 h-8 rounded-full bg-[#242933] hover:bg-[#303744] text-[#cfd8dc] flex items-center justify-center text-xs cursor-pointer"
+            >
+              ✕
+            </button>
+            <span className="text-[11px] font-num font-bold text-[#cfd8dc] whitespace-nowrap" dir="ltr">
+              {selectedPendingOrder.type.replace('_', ' ').toUpperCase()} @ {selectedPendingOrder.targetPrice.toFixed(currentQuote.digits)}
+            </span>
+            <button
+              onClick={() => {
+                cancelPendingOrder(selectedPendingOrder.id);
+                setSelectedPendingOrderId(null);
+                setTradeToast('تم إلغاء الأمر المعلق');
+                setTimeout(() => setTradeToast(null), 2500);
+              }}
+              className="px-3.5 h-8 rounded-full bg-[#d32f2f] hover:bg-[#c62828] text-white font-bold text-xs flex items-center justify-center cursor-pointer transition-colors whitespace-nowrap"
+            >
+              حذف الأمر
             </button>
           </div>
         )}

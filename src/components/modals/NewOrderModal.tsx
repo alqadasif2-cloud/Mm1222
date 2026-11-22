@@ -1,20 +1,42 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTrading } from '../../context/TradingContext';
+import { PendingOrderType } from '../../types/mt5';
 
 export const NewOrderModal: React.FC = () => {
-  const { orderModalSymbol, closeOrderModal, quotes, openTrade, setActiveTab, setSelectedSymbol } = useTrading();
+  const {
+    orderModalSymbol,
+    closeOrderModal,
+    quotes,
+    openTrade,
+    placePendingOrder,
+    setActiveTab,
+    setSelectedSymbol
+  } = useTrading();
 
   const [lot, setLot] = useState<number>(0.01);
   const [sl, setSl] = useState<string>('');
   const [tp, setTp] = useState<string>('');
-  const [orderType, setOrderType] = useState<'market' | 'buy_limit' | 'sell_limit'>('market');
+  const [orderType, setOrderType] = useState<'market' | PendingOrderType>('market');
+  const [targetPrice, setTargetPrice] = useState<string>('');
   const [feedback, setFeedback] = useState<string | null>(null);
-
-  if (!orderModalSymbol) return null;
 
   const quote = quotes.find((q) => q.symbol === orderModalSymbol) || quotes[0];
 
-  const handleExecute = (type: 'buy' | 'sell') => {
+  useEffect(() => {
+    if (!orderModalSymbol || !quote) return;
+    if (orderType === 'buy_limit' || orderType === 'sell_stop') {
+      const suggested = quote.bid * 0.995;
+      setTargetPrice(suggested.toFixed(quote.digits));
+    } else if (orderType === 'sell_limit' || orderType === 'buy_stop') {
+      const suggested = quote.ask * 1.005;
+      setTargetPrice(suggested.toFixed(quote.digits));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderType, orderModalSymbol]);
+
+  if (!orderModalSymbol) return null;
+
+  const handleExecuteMarket = (type: 'buy' | 'sell') => {
     const success = openTrade(
       quote.symbol,
       type,
@@ -29,6 +51,30 @@ export const NewOrderModal: React.FC = () => {
         closeOrderModal();
         setActiveTab('trade');
       }, 600);
+    }
+  };
+
+  const handlePlacePending = () => {
+    if (orderType === 'market') return;
+    const priceNum = parseFloat(targetPrice);
+    if (isNaN(priceNum) || priceNum <= 0) return;
+
+    const success = placePendingOrder(
+      quote.symbol,
+      orderType,
+      lot,
+      priceNum,
+      sl ? parseFloat(sl) : undefined,
+      tp ? parseFloat(tp) : undefined
+    );
+    if (success) {
+      const label = orderType.replace('_', ' ').toUpperCase();
+      setFeedback(`تم وضع أمر ${label} عند ${priceNum.toFixed(quote.digits)}`);
+      setTimeout(() => {
+        setFeedback(null);
+        closeOrderModal();
+        setActiveTab('trade');
+      }, 650);
     }
   };
 
@@ -76,8 +122,24 @@ export const NewOrderModal: React.FC = () => {
               <option value="market">تنفيذ فوري بالسوق (Market Execution)</option>
               <option value="buy_limit">أمر شراء معلق (Buy Limit)</option>
               <option value="sell_limit">أمر بيع معلق (Sell Limit)</option>
+              <option value="buy_stop">أمر شراء إيقاف (Buy Stop)</option>
+              <option value="sell_stop">أمر بيع إيقاف (Sell Stop)</option>
             </select>
           </div>
+
+          {orderType !== 'market' && (
+            <div>
+              <label className="text-[11px] text-[#64b5f6] block mb-1">السعر المحدد للأمر (Price):</label>
+              <input
+                type="number"
+                step="any"
+                value={targetPrice}
+                onChange={(e) => setTargetPrice(e.target.value)}
+                dir="ltr"
+                className="w-full bg-[#0e1116] border border-[#3897f0]/60 rounded-xl px-3 py-2 text-center text-white font-num font-bold text-sm outline-none"
+              />
+            </div>
+          )}
 
           <div>
             <label className="text-[11px] text-[#8e9aa8] block mb-1">حجم العقد (Lots):</label>
@@ -153,20 +215,33 @@ export const NewOrderModal: React.FC = () => {
             </div>
           )}
 
-          <div dir="ltr" className="grid grid-cols-2 gap-3">
+          {orderType === 'market' ? (
+            <div dir="ltr" className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => handleExecuteMarket('sell')}
+                className="py-3 bg-[#d32f2f] hover:bg-[#c62828] text-white font-bold rounded-xl text-sm cursor-pointer transition-colors"
+              >
+                SELL
+              </button>
+              <button
+                onClick={() => handleExecuteMarket('buy')}
+                className="py-3 bg-[#1976d2] hover:bg-[#1565c0] text-white font-bold rounded-xl text-sm cursor-pointer transition-colors"
+              >
+                BUY
+              </button>
+            </div>
+          ) : (
             <button
-              onClick={() => handleExecute('sell')}
-              className="py-3 bg-[#d32f2f] hover:bg-[#c62828] text-white font-bold rounded-xl text-sm cursor-pointer transition-colors"
+              onClick={handlePlacePending}
+              className={`w-full py-3 font-bold rounded-xl text-sm text-white cursor-pointer transition-colors ${
+                orderType.startsWith('buy')
+                  ? 'bg-[#1976d2] hover:bg-[#1565c0]'
+                  : 'bg-[#d32f2f] hover:bg-[#c62828]'
+              }`}
             >
-              SELL
+              وضع أمر {orderType.replace('_', ' ').toUpperCase()}
             </button>
-            <button
-              onClick={() => handleExecute('buy')}
-              className="py-3 bg-[#1976d2] hover:bg-[#1565c0] text-white font-bold rounded-xl text-sm cursor-pointer transition-colors"
-            >
-              BUY
-            </button>
-          </div>
+          )}
         </div>
       </div>
     </div>
